@@ -345,6 +345,16 @@ input{font:inherit;color:inherit}
   transition:all .2s;
   font-size:.94em;
 }
+.cz.hearing{
+  background:var(--sun);
+  border-color:var(--sun-dark);
+  border-style:solid;
+  animation:hearing 0.6s ease infinite alternate;
+}
+@keyframes hearing{
+  from{box-shadow:0 0 0 0 rgba(245,201,94,.6)}
+  to{box-shadow:0 0 0 8px rgba(245,201,94,0)}
+}
 .cz.now{
   background:var(--sun);
   border-color:var(--sun-dark);
@@ -361,13 +371,6 @@ input{font:inherit;color:inherit}
   border-style:solid;
   color:var(--leaf-dark);
   font-weight:700;
-}
-.cz.shown{
-  background:var(--paper-soft);
-  border-color:var(--muted-light);
-  border-style:solid;
-  color:var(--ink-soft);
-  font-style:italic;
 }
 .cz.shake{animation:shake .35s ease}
 @keyframes shake{
@@ -411,19 +414,6 @@ input{font:inherit;color:inherit}
   0%,100%{box-shadow:0 0 0 0 rgba(232,122,93,.5)}
   50%{box-shadow:0 0 0 8px rgba(232,122,93,0)}
 }
-
-.cz-show{
-  width:24px;height:24px;
-  display:inline-flex;align-items:center;justify-content:center;
-  background:transparent;
-  border:1.5px solid var(--muted-light);
-  border-radius:50%;
-  color:var(--muted);
-  font-size:13px;font-weight:700;
-  flex-shrink:0;
-  transition:all .15s;
-}
-.cz-show:hover{background:var(--muted-light);color:#fff}
 
 /* ═══════════════════════════════════════════
    BANNER FEEDBACK
@@ -788,8 +778,8 @@ input{font:inherit;color:inherit}
         <div class="done-stat-lbl">riascolti</div>
       </div>
       <div class="done-stat">
-        <div class="done-stat-num" id="done-shown">0</div>
-        <div class="done-stat-lbl">aiuti</div>
+        <div class="done-stat-num" id="done-attempts">0</div>
+        <div class="done-stat-lbl">tentativi</div>
       </div>
     </div>
     <div class="done-actions">
@@ -974,13 +964,11 @@ function buildStory(){
 
     if(clozeIdx.has(i) && tok.isWord){
       // cloze
-      const display = tok.text.replace(/^([\w’']+)/, '___');
       html += `<span class="cz" data-i="${i}" data-answer="${escapeAttr(tok.base)}">
         <input type="text" class="cz-input" placeholder="?" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false" maxlength="${Math.max(8, tok.base.length+2)}">
         <button class="cz-replay" title="Riascolta">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/></svg>
         </button>
-        <button class="cz-show" title="Mostra parola">?</button>
       </span>`;
       // se la parola finiva con punteggiatura, attaccala fuori dal box
       const punct = tok.text.replace(/^[\w’']+/, '');
@@ -1008,7 +996,6 @@ function attachClozeListeners(){
   $$(".cz").forEach(el => {
     const input = el.querySelector(".cz-input");
     const replay = el.querySelector(".cz-replay");
-    const show = el.querySelector(".cz-show");
     const i = parseInt(el.dataset.i, 10);
 
     input.addEventListener("keydown", e => {
@@ -1025,7 +1012,6 @@ function attachClozeListeners(){
       }
     });
     replay.addEventListener("click", () => replayWord(i));
-    show.addEventListener("click", () => revealWord(i));
   });
 }
 
@@ -1077,7 +1063,7 @@ function startTimeUpdate(){
 }
 
 function tick(t){
-  // 1) trova token corrente
+  // 1) trova token corrente (parola che sta venendo pronunciata)
   const tokens = STORY.tokens;
   let cur = -1;
   for(let i=0; i<tokens.length; i++){
@@ -1087,59 +1073,90 @@ function tick(t){
     if(t < tok.start){ break; }
   }
 
-  // se siamo oltre l'ultima parola, evidenzia l'ultima
+  // se siamo oltre l'ultima parola, fine storia
   if(cur === -1 && t >= STORY.tokens[STORY.tokens.length-1].end){
     handleEndOfStory();
     return;
   }
 
-  // 2) check cloze pendenti tra ultimo currentToken e nuovo cur
-  if(state.isPlaying && !state.pausedForCloze && cur >= 0){
-    const clozeSet = new Set(STORY.cloze[state.level] || []);
-    // trova la prossima cloze non risolta che dovremmo "incontrare"
-    for(let i = Math.max(0, state.currentToken); i <= cur; i++){
-      if(clozeSet.has(i)){
-        const st = state.cloze[i];
-        if(!st || st.state === 'pending'){
-          // ferma qui!
-          YTP.pauseVideo();
-          state.pausedForCloze = true;
-          state.pendingClozeIdx = i;
-          highlightCloze(i);
-          // sposta l'audio al punto giusto (subito prima della parola)
-          YTP.seekTo(STORY.tokens[i].start - 0.1, true);
-          return;
-        }
-      }
-    }
-  }
+  // 2) gestione visiva: parola corrente + cloze in ascolto
+  const clozeArr = STORY.cloze[state.level] || [];
+  const clozeSet = new Set(clozeArr);
+
+  // togli "hearing" da tutte le cloze (verrà rimesso solo su quella attiva)
+  $$(".cz.hearing").forEach(el => el.classList.remove("hearing"));
 
   if(cur !== state.currentToken){
-    // togli highlight precedente
+    // togli highlight precedente dalla parola precedente
     if(state.currentToken >= 0){
       const prev = $(`.w[data-i="${state.currentToken}"]`);
       if(prev){ prev.classList.remove("now"); prev.classList.add("read"); }
     }
     if(cur >= 0){
-      const el = $(`.w[data-i="${cur}"]`);
-      if(el){
-        el.classList.add("now");
-        scrollIntoSafeView(el);
+      // se è una cloze, evidenzia il box; se è parola normale, evidenzia il testo
+      if(clozeSet.has(cur)){
+        const cz = $(`.cz[data-i="${cur}"]`);
+        if(cz){
+          const st = state.cloze[cur];
+          // mostra "hearing" solo se non è ancora risolta
+          if(!st || st.state === 'pending'){
+            cz.classList.add("hearing");
+          }
+          scrollIntoSafeView(cz);
+        }
+      } else {
+        const el = $(`.w[data-i="${cur}"]`);
+        if(el){
+          el.classList.add("now");
+          scrollIntoSafeView(el);
+        }
       }
     }
     state.currentToken = cur;
-    updateProgress();
+  } else if(cur >= 0 && clozeSet.has(cur)){
+    // anche senza cambio cur, mantieni "hearing" finché stiamo dentro la cloze
+    const cz = $(`.cz[data-i="${cur}"]`);
+    const st = state.cloze[cur];
+    if(cz && (!st || st.state === 'pending')) cz.classList.add("hearing");
   }
+
+  // 3) PAUSA DOPO LA PAROLA: ferma l'audio quando ha appena finito di pronunciare una cloze pending
+  if(state.isPlaying && !state.pausedForCloze){
+    for(const idx of clozeArr){
+      const st = state.cloze[idx];
+      // skip se già risolta/mostrata o già proposta una volta in questa "passata"
+      if(st && st.state !== 'pending') continue;
+      if(st && st.wasPrompted) continue;
+      const tok = STORY.tokens[idx];
+      // condizione: l'audio ha appena superato la fine della parola (margine 1.5s per evitare di rifermarsi su skip avanti)
+      if(t >= tok.end && t < tok.end + 1.5){
+        YTP.pauseVideo();
+        state.pausedForCloze = true;
+        state.pendingClozeIdx = idx;
+        promptCloze(idx);
+        return;
+      }
+    }
+  }
+
+  updateProgress();
 }
 
-function highlightCloze(i){
-  const el = $(`.cz[data-i="${i}"]`);
+function promptCloze(idx){
+  const el = $(`.cz[data-i="${idx}"]`);
   if(!el) return;
+  // marca la cloze come "già proposta in questa passata" — evita di rifermarsi se l'utente preme play senza rispondere
+  if(!state.cloze[idx]) state.cloze[idx] = { state: 'pending', attempts: 0 };
+  state.cloze[idx].wasPrompted = true;
   $$(".cz.now").forEach(x => x.classList.remove("now"));
+  el.classList.remove("hearing");
   el.classList.add("now");
   scrollIntoSafeView(el);
   const inp = el.querySelector(".cz-input");
-  if(inp){ setTimeout(() => inp.focus(), 200); }
+  if(inp){
+    inp.disabled = false;
+    setTimeout(() => inp.focus(), 250);
+  }
 }
 
 function scrollIntoSafeView(el){
@@ -1160,21 +1177,26 @@ function scrollIntoSafeView(el){
 function replayWord(tokIdx){
   if(!state.audioReady) return;
   const tok = STORY.tokens[tokIdx];
+  // seek 5 secondi prima della parola e riproduci
   const from = Math.max(STORY.audioStart, tok.start - REPLAY_PRE_SEC);
   YTP.seekTo(from, true);
   YTP.playVideo();
   state.replayCount++;
-  // forza il tick a ri-rilevare le cloze al passaggio
+  // resetto stato cosicché il tick possa ri-rilevare la cloze quando l'audio supera tok.end
   state.pausedForCloze = false;
   state.currentToken = -1;
   state.pendingClozeIdx = tokIdx;
-  // de-evidenzia eventuali "now" nel testo
+  // reset wasPrompted: l'audio dovrà rifermarsi DOPO la parola
+  if(!state.cloze[tokIdx]) state.cloze[tokIdx] = { state: 'pending', attempts: 0 };
+  state.cloze[tokIdx].wasPrompted = false;
+  // de-evidenzia eventuali "now" / "hearing"
   $$(".w.now").forEach(x => { x.classList.remove("now"); x.classList.add("read"); });
-  // animazione visiva sul bottone
+  $$(".cz.now").forEach(x => x.classList.remove("now"));
+  // animazione visiva sul bottone replay
   const btn = $(`.cz[data-i="${tokIdx}"] .cz-replay`);
   if(btn){
     btn.classList.add("playing");
-    setTimeout(() => btn.classList.remove("playing"), (REPLAY_PRE_SEC + 1) * 1000);
+    setTimeout(() => btn.classList.remove("playing"), (REPLAY_PRE_SEC + 1.5) * 1000);
   }
 }
 
@@ -1224,33 +1246,6 @@ function checkCloze(tokIdx){
     setTimeout(() => el.classList.remove("shake"), 400);
     showFeedback(false, "Riprova!");
     input.select();
-    // dopo 3 errori, mostra hint sulla prima lettera
-    if(st.attempts >= 3){
-      input.placeholder = answer.charAt(0).toLowerCase() + "…";
-    }
-  }
-}
-
-function revealWord(tokIdx){
-  const el = $(`.cz[data-i="${tokIdx}"]`);
-  if(!el) return;
-  const input = el.querySelector(".cz-input");
-  const answer = el.dataset.answer;
-  const st = state.cloze[tokIdx] || { state: 'pending', attempts: 0 };
-  if(st.state === 'solved') return;
-  st.state = 'shown';
-  state.cloze[tokIdx] = st;
-  el.classList.remove("now","shake");
-  el.classList.add("shown");
-  input.value = answer;
-  input.classList.add("disabled-input");
-  input.disabled = true;
-  state.shownCount++;
-  updateProgress();
-  if(state.pausedForCloze && state.pendingClozeIdx === tokIdx){
-    state.pausedForCloze = false;
-    state.pendingClozeIdx = -1;
-    setTimeout(() => { if(YTP && state.audioReady) YTP.playVideo(); }, 400);
   }
 }
 
@@ -1287,9 +1282,12 @@ function handleEndOfStory(){
   if(endHandled) return;
   endHandled = true;
   if(YTP) YTP.pauseVideo();
+  // tentativi totali = somma di tutti gli attempts su cloze pending o solved
+  let totalAttempts = 0;
+  Object.values(state.cloze).forEach(st => totalAttempts += (st.attempts || 0));
   $("#done-ok").textContent = state.okCount;
   $("#done-replays").textContent = state.replayCount;
-  $("#done-shown").textContent = state.shownCount;
+  $("#done-attempts").textContent = totalAttempts;
   const total = (STORY.cloze[state.level] || []).length;
   let msg = "Hai finito la fiaba dei tre porcellini.";
   if(state.okCount === total) msg = "Hai indovinato TUTTE le parole. Sei un campione!";
